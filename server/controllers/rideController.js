@@ -115,18 +115,27 @@ async function acceptRide(req, res) {
 }
 
 // Assigned driver advances the ride
+
 async function updateRideStatus(req, res) {
   try {
     const { status } = req.body;
+    const rideId = req.params.id;
+    const driverId = req.user.userId;
+
+    console.log("Updating ride status:", {
+      rideId,
+      driverId,
+      requestedStatus: status,
+    });
 
     const allowedTransitions = {
       accepted: "in_progress",
       in_progress: "completed",
     };
 
-    if (!allowedTransitions[status]) {
+    if (!Object.values(allowedTransitions).includes(status)) {
       return res.status(400).json({
-        message: "Status must be in_progress or completed",
+        message: "Invalid status. Use in_progress or completed.",
       });
     }
 
@@ -141,24 +150,32 @@ async function updateRideStatus(req, res) {
          AND driver_id = $3
          AND status = $4
        RETURNING *`,
-      [status, req.params.id, req.user.userId, previousStatus]
+      [status, rideId, driverId, previousStatus]
     );
+
+    console.log("Updated ride rows:", result.rowCount);
 
     if (result.rows.length === 0) {
       return res.status(409).json({
-        message: "Ride not found, not assigned to you, or invalid transition",
+        message:
+          "Ride was not updated. Check that the ride belongs to you and its current status is correct.",
       });
     }
 
-    return res.json({
-      message: "Ride status updated",
+    return res.status(200).json({
+      message: `Ride successfully marked as ${status}.`,
       ride: result.rows[0],
     });
   } catch (error) {
-    console.error("Update ride status error:", error.message);
-    return res.status(500).json({ message: "Could not update ride" });
+    console.error("Update ride status error:", error);
+
+    return res.status(500).json({
+      message: "Could not update ride status.",
+      error: error.message,
+    });
   }
 }
+
 
 
 async function getMyDriverRides(req, res) {
@@ -178,6 +195,43 @@ async function getMyDriverRides(req, res) {
 }
 
 
+async function cancelRide(req, res) {
+  try {
+    const rideId = req.params.id;
+    const riderId = req.user.userId;
+
+    const result = await pool.query(
+      `UPDATE rides
+       SET status = 'cancelled'
+       WHERE id = $1
+         AND rider_id = $2
+         AND status IN ('requested', 'accepted')
+       RETURNING *`,
+      [rideId, riderId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(409).json({
+        message:
+          "Ride cannot be cancelled. It may not belong to you, or it may already be in progress, completed, or cancelled.",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Ride cancelled successfully.",
+      ride: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Cancel ride error:", error.message);
+
+    return res.status(500).json({
+      message: "Could not cancel ride.",
+    });
+  }
+}
+
+
+
 module.exports = {
   createRide,
   getMyRides,
@@ -185,4 +239,5 @@ module.exports = {
   acceptRide,
   updateRideStatus,
   getMyDriverRides,
+  cancelRide,
 };

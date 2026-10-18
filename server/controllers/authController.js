@@ -72,7 +72,10 @@ const register = async (req, res) => {
   }
 };
 
+
 const login = async (req, res) => {
+  const startedAt = Date.now();
+
   try {
     const { email, password } = req.body;
 
@@ -84,15 +87,45 @@ const login = async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
+    console.log("[LOGIN] Request received");
+
+    const dbStartedAt = Date.now();
+
     const result = await pool.query(
       `SELECT id, full_name, email, password_hash, role
-       FROM users WHERE email = $1`,
+       FROM users
+       WHERE email = $1`,
       [normalizedEmail]
+    );
+
+    console.log(
+      `[LOGIN] Database query took ${Date.now() - dbStartedAt} ms`
     );
 
     const user = result.rows[0];
 
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    if (!user) {
+      console.log("[LOGIN] User not found");
+
+      return res.status(401).json({
+        message: "Invalid email or password",
+      });
+    }
+
+    const passwordStartedAt = Date.now();
+
+    const passwordMatches = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
+    console.log(
+      `[LOGIN] Password comparison took ${Date.now() - passwordStartedAt} ms`
+    );
+
+    if (!passwordMatches) {
+      console.log("[LOGIN] Password did not match");
+
       return res.status(401).json({
         message: "Invalid email or password",
       });
@@ -104,6 +137,10 @@ const login = async (req, res) => {
       { expiresIn: "1d" }
     );
 
+    console.log(
+      `[LOGIN] Completed in ${Date.now() - startedAt} ms`
+    );
+
     return res.json({
       message: "Login successful",
       token,
@@ -111,15 +148,21 @@ const login = async (req, res) => {
         id: user.id,
         full_name: user.full_name,
         email: user.email,
+        phone: user.phone || null,
         role: user.role,
       },
     });
   } catch (error) {
-    console.error("Login error:", error.message);
+    console.error(
+      `[LOGIN] Failed after ${Date.now() - startedAt} ms:`,
+      error.message
+    );
+
     return res.status(500).json({
       message: "Login failed",
     });
   }
 };
+
 
 module.exports = { register, login };

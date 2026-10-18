@@ -11,6 +11,7 @@ const {
   acceptRide,
   updateRideStatus,
   getMyDriverRides,
+  cancelRide,
 } = require("../controllers/rideController");
 
 // Require a valid JWT for all ride endpoints
@@ -59,5 +60,15 @@ router.get("/driver/mine", (req, res, next) => {
   }
   next();
 }, getMyDriverRides);
+
+router.patch("/:id/cancel", (req, res, next) => {
+  if (req.user.role !== "rider") {
+    return res.status(403).json({
+      message: "Riders only",
+    });
+  }
+
+  next();
+}, cancelRide);
 
 module.exports = router;

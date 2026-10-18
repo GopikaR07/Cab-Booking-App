@@ -1,7 +1,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CarFront, LogOut, MapPin, RefreshCw } from "lucide-react";
+import { CarFront, LogOut, RefreshCw } from "lucide-react";
+import MapBookingFields from "../components/MapBookingFields";
 import "./dashboard.css";
 
 const API = import.meta.env.VITE_API_URL;
@@ -9,16 +10,32 @@ const API = import.meta.env.VITE_API_URL;
 export default function Dashboard() {
   const navigate = useNavigate();
   const token = sessionStorage.getItem("cabToken");
+
   const [user, setUser] = useState(() =>
     JSON.parse(sessionStorage.getItem("cabUser") || "null")
   );
+
   const [rides, setRides] = useState([]);
   const [pickup, setPickup] = useState("");
   const [destination, setDestination] = useState("");
-  const [distance, setDistance] = useState("5");
+  const [distance, setDistance] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  // Receive the selected locations and calculated route distance.
+  const handleRouteChange = useCallback(
+    ({ pickupLocation, dropoffLocation, distanceKm }) => {
+      setPickup(pickupLocation);
+      setDestination(dropoffLocation);
+      setDistance(
+        distanceKm === "" || distanceKm == null
+          ? ""
+          : String(distanceKm)
+      );
+    },
+    []
+  );
 
   const logout = useCallback(() => {
     sessionStorage.removeItem("cabToken");
@@ -26,37 +43,42 @@ export default function Dashboard() {
     navigate("/login", { replace: true });
   }, [navigate]);
 
-  const request = useCallback(async (path, options = {}) => {
-    const response = await fetch(`${API}${path}`, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-    });
+  const request = useCallback(
+    async (path, options = {}) => {
+      const response = await fetch(`${API}${path}`, {
+        ...options,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
+      });
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if (response.status === 401) {
-      logout();
-      throw new Error("Your session expired. Please log in again.");
-    }
+      if (response.status === 401) {
+        logout();
+        throw new Error("Your session expired. Please log in again.");
+      }
 
-    if (!response.ok) {
-      throw new Error(data.message || "Request failed");
-    }
+      if (!response.ok) {
+        throw new Error(data.message || "Request failed");
+      }
 
-    return data;
-  }, [token, logout]);
+      return data;
+    },
+    [token, logout]
+  );
 
+  // Load the rider's history or the driver's assigned rides.
   const loadRides = useCallback(async () => {
     setError("");
 
     try {
-      const path = user.role === "rider"
-        ? "/api/rides/mine"
-        : "/api/rides/driver/mine";
+      const path =
+        user.role === "rider"
+          ? "/api/rides/mine"
+          : "/api/rides/driver/mine";
 
       const data = await request(path);
       setRides(data.rides || []);
@@ -65,47 +87,85 @@ export default function Dashboard() {
     }
   }, [request, user]);
 
-  const loadAvailableRides = useCallback(async () => {
+  // Drivers need to see both new requests and assigned rides.
+  const loadDriverRides = useCallback(async () => {
     setError("");
 
     try {
-      const data = await request("/api/rides/available");
-      setRides(data.rides || []);
+      const [availableData, assignedData] = await Promise.all([
+        request("/api/rides/available"),
+        request("/api/rides/driver/mine"),
+      ]);
+
+      const availableRides = availableData.rides || [];
+      const assignedRides = assignedData.rides || [];
+
+      const ridesById = new Map();
+
+      [...availableRides, ...assignedRides].forEach((ride) => {
+        ridesById.set(ride.id, ride);
+      });
+
+      const allRides = Array.from(ridesById.values());
+
+      allRides.sort(
+        (a, b) =>
+          new Date(b.created_at) - new Date(a.created_at)
+      );
+
+      setRides(allRides);
     } catch (err) {
       setError(err.message);
     }
   }, [request]);
 
+  // Verify the saved login token.
   useEffect(() => {
     if (!token || !user) {
       navigate("/login", { replace: true });
       return;
     }
 
-    // Verify the token with the backend, not just browser storage.
     request("/api/auth/me")
-      .then(data => {
+      .then((data) => {
         setUser(data.user);
-        sessionStorage.setItem("cabUser", JSON.stringify(data.user));
+        sessionStorage.setItem(
+          "cabUser",
+          JSON.stringify(data.user)
+        );
       })
-      .catch(err => setError(err.message));
+      .catch((err) => setError(err.message));
   }, [token, request, navigate]);
 
+  // Load rides according to the user's role.
   useEffect(() => {
     if (!user) return;
 
     if (user.role === "rider") {
       loadRides();
     } else {
-      loadAvailableRides();
+      loadDriverRides();
     }
-  }, [user?.role, loadRides, loadAvailableRides]);
+  }, [user?.role, loadRides, loadDriverRides]);
 
   async function bookRide(e) {
     e.preventDefault();
     setLoading(true);
     setMessage("");
     setError("");
+
+    if (
+      !pickup ||
+      !destination ||
+      !Number.isFinite(Number(distance)) ||
+      Number(distance) <= 0
+    ) {
+      setError(
+        "Please select both locations and wait for the driving route to be calculated."
+      );
+      setLoading(false);
+      return;
+    }
 
     try {
       const data = await request("/api/rides", {
@@ -118,10 +178,11 @@ export default function Dashboard() {
       });
 
       setMessage(
-        `Ride requested! Estimated fare: ₹${data.ride.estimated_fare}`
+        `Ride requested! Estimated fare: ₹${Number(
+          data.ride.estimated_fare
+        ).toFixed(2)}`
       );
-      setPickup("");
-      setDestination("");
+
       await loadRides();
     } catch (err) {
       setError(err.message);
@@ -136,9 +197,12 @@ export default function Dashboard() {
     setMessage("");
 
     try {
-      await request(`/api/rides/${id}/accept`, { method: "PATCH" });
+      await request(`/api/rides/${id}/accept`, {
+        method: "PATCH",
+      });
+
       setMessage("Ride accepted successfully.");
-      await loadAvailableRides();
+      await loadDriverRides();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -156,8 +220,16 @@ export default function Dashboard() {
         method: "PATCH",
         body: JSON.stringify({ status }),
       });
-      setMessage(`Ride marked as ${status.replace("_", " ")}.`);
-      await loadRides();
+
+      setMessage(
+        `Ride marked as ${status.replace("_", " ")}.`
+      );
+
+      if (user.role === "driver") {
+        await loadDriverRides();
+      } else {
+        await loadRides();
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -167,14 +239,21 @@ export default function Dashboard() {
 
   if (!user) return null;
 
+  const estimatedFare =
+    distance !== "" && Number(distance) > 0
+      ? 40 + Number(distance) * 12
+      : null;
+
   return (
     <main className="dashboard-page">
       <header className="dash-header">
         <a className="dash-brand" href="/dashboard">
           <CarFront size={28} /> RideOn
         </a>
+
         <div className="dash-user">
           <span>{user.full_name}</span>
+
           <button className="logout-btn" onClick={logout}>
             <LogOut size={17} /> Logout
           </button>
@@ -185,13 +264,17 @@ export default function Dashboard() {
         <div className="dash-heading">
           <div>
             <p className="eyebrow">
-              {user.role === "rider" ? "RIDER PORTAL" : "DRIVER PORTAL"}
+              {user.role === "rider"
+                ? "RIDER PORTAL"
+                : "DRIVER PORTAL"}
             </p>
+
             <h1>
               {user.role === "rider"
                 ? "Where are we going?"
                 : "Your rides, your road."}
             </h1>
+
             <p className="dash-subtitle">
               {user.role === "rider"
                 ? "Book a ride and follow its progress."
@@ -201,62 +284,66 @@ export default function Dashboard() {
 
           <button
             className="secondary-btn"
-            onClick={user.role === "rider"
-              ? loadRides
-              : loadAvailableRides}
+            onClick={
+              user.role === "rider"
+                ? loadRides
+                : loadDriverRides
+            }
           >
             <RefreshCw size={16} /> Refresh
           </button>
         </div>
 
-        {message && <div className="notice success">{message}</div>}
-        {error && <div className="notice error">{error}</div>}
+        {message && (
+          <div className="notice success">{message}</div>
+        )}
+
+        {error && (
+          <div className="notice error">{error}</div>
+        )}
 
         {user.role === "rider" && (
           <section className="dash-panel">
             <h2>Book a ride</h2>
-            <form className="booking-form" onSubmit={bookRide}>
-              <label>
-                <MapPin size={17} /> Pickup location
-                <input
-                  value={pickup}
-                  onChange={e => setPickup(e.target.value)}
-                  placeholder="Enter pickup location"
-                  maxLength={250}
-                  required
-                />
-              </label>
 
-              <label>
-                <MapPin size={17} /> Destination
-                <input
-                  value={destination}
-                  onChange={e => setDestination(e.target.value)}
-                  placeholder="Where do you want to go?"
-                  maxLength={250}
-                  required
-                />
-              </label>
+            <form
+              className="booking-form"
+              onSubmit={bookRide}
+            >
+              <MapBookingFields
+                onRouteChange={handleRouteChange}
+              />
 
-              <label>
-                Estimated distance (km)
-                <input
-                  type="number"
-                  min="0.1"
-                  max="500"
-                  step="0.1"
-                  value={distance}
-                  onChange={e => setDistance(e.target.value)}
-                  required
-                />
-              </label>
+              <div className="fare-estimate">
+                {estimatedFare !== null ? (
+                  <>
+                    <p>
+                      <strong>Driving distance:</strong>{" "}
+                      {Number(distance).toFixed(2)} km
+                    </p>
+                    <p>
+                      <strong>Estimated fare:</strong> ₹
+                      {estimatedFare.toFixed(2)}
+                    </p>
+                  </>
+                ) : (
+                  <p>
+                    Select pickup and destination to calculate
+                    your fare.
+                  </p>
+                )}
+              </div>
 
-              <p className="fare-estimate">
-                Estimated fare: ₹
-                {(40 + Math.max(0, Number(distance) || 0) * 12).toFixed(2)}
-              </p>
-
-              <button className="primary-btn" disabled={loading}>
+              <button
+                className="primary-btn"
+                disabled={
+                  loading ||
+                  !pickup ||
+                  !destination ||
+                  !distance ||
+                  Number(distance) <= 0
+                }
+              >
                 {loading ? "Please wait..." : "Request ride"}
               </button>
             </form>
@@ -270,7 +357,10 @@ export default function Dashboard() {
                 ? "My ride history"
                 : "Available and assigned rides"}
             </h2>
-            <span className="ride-count">{rides.length} rides</span>
+
+            <span className="ride-count">
+              {rides.length} rides
+            </span>
           </div>
 
           {rides.length === 0 ? (
@@ -280,15 +370,21 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="ride-list">
-              {rides.map(ride => (
-                <article className="ride-card" key={ride.id}>
+              {rides.map((ride) => (
+                <article
+                  className="ride-card"
+                  key={ride.id}
+                >
                   <div className="ride-route">
                     <span className="route-dot pickup-dot" />
+
                     <div>
                       <small>Pickup</small>
                       <p>{ride.pickup_location}</p>
                     </div>
+
                     <span className="route-dot destination-dot" />
+
                     <div>
                       <small>Destination</small>
                       <p>{ride.dropoff_location}</p>
@@ -296,8 +392,14 @@ export default function Dashboard() {
                   </div>
 
                   <div className="ride-meta">
-                    <strong>₹{Number(ride.estimated_fare).toFixed(2)}</strong>
-                    <span className={`status status-${ride.status}`}>
+                    <strong>
+                      ₹
+                      {Number(ride.estimated_fare).toFixed(2)}
+                    </strong>
+
+                    <span
+                      className={`status status-${ride.status}`}
+                    >
                       {ride.status.replace("_", " ")}
                     </span>
                   </div>
@@ -313,26 +415,79 @@ export default function Dashboard() {
                           Accept ride
                         </button>
                       )}
+
                       {ride.status === "accepted" && (
                         <button
                           className="primary-btn"
                           disabled={loading}
-                          onClick={() => updateStatus(ride.id, "in_progress")}
+                          onClick={() =>
+                            updateStatus(
+                              ride.id,
+                              "in_progress"
+                            )
+                          }
                         >
                           Start ride
                         </button>
                       )}
+
                       {ride.status === "in_progress" && (
                         <button
                           className="primary-btn"
                           disabled={loading}
-                          onClick={() => updateStatus(ride.id, "completed")}
+                          onClick={() =>
+                            updateStatus(
+                              ride.id,
+                              "completed"
+                            )
+                          }
                         >
                           Complete ride
                         </button>
                       )}
                     </div>
                   )}
+                  
+{user.role === "rider" &&
+  ["requested", "accepted"].includes(ride.status) && (
+    <div className="ride-actions">
+      <button
+        className="cancel-ride-btn"
+        disabled={loading}
+        onClick={async () => {
+          const confirmed = window.confirm(
+            "Are you sure you want to cancel this ride?"
+          );
+
+          if (!confirmed) return;
+
+          setLoading(true);
+          setError("");
+          setMessage("");
+
+          try {
+            const data = await request(
+              `/api/rides/${ride.id}/cancel`,
+              { method: "PATCH" }
+            );
+
+            setMessage(
+              data.message || "Ride cancelled successfully."
+            );
+
+            await loadRides();
+          } catch (err) {
+            setError(err.message);
+          } finally {
+            setLoading(false);
+          }
+        }}
+      >
+        Cancel ride
+      </button>
+    </div>
+  )}
+
                 </article>
               ))}
             </div>

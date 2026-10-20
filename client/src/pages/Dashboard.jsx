@@ -1,7 +1,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { CarFront, LogOut, RefreshCw } from "lucide-react";
+import { CarFront, LogOut, RefreshCw, Star } from "lucide-react";
 
 import MapBookingFields from "../components/MapBookingFields";
 import "./dashboard.css";
@@ -24,12 +24,18 @@ export default function Dashboard() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  // Review form state
+  // Rider review state
   const [reviewRatings, setReviewRatings] = useState({});
   const [reviewComments, setReviewComments] = useState({});
   const [submittingReview, setSubmittingReview] = useState(null);
   const [myReviews, setMyReviews] = useState([]);
   const [loadingReviews, setLoadingReviews] = useState(true);
+
+  // Driver rating state
+  const [driverReviews, setDriverReviews] = useState([]);
+  const [averageRating, setAverageRating] = useState(null);
+  const [totalReviews, setTotalReviews] = useState(0);
+  const [loadingDriverReviews, setLoadingDriverReviews] = useState(false);
 
   const logout = useCallback(() => {
     sessionStorage.removeItem("cabToken");
@@ -65,7 +71,6 @@ export default function Dashboard() {
     [token, logout]
   );
 
-  // Receive locations and route distance from the map component.
   const handleRouteChange = useCallback(
     ({ pickupLocation, dropoffLocation, distanceKm }) => {
       setPickup(pickupLocation);
@@ -79,7 +84,7 @@ export default function Dashboard() {
     []
   );
 
-  // Load the rider's previously submitted reviews.
+  // Load reviews submitted by the current rider
   const loadMyReviews = useCallback(async () => {
     setLoadingReviews(true);
 
@@ -87,13 +92,39 @@ export default function Dashboard() {
       const data = await request("/api/reviews/mine");
       setMyReviews(data.reviews || []);
     } catch (err) {
-      console.error("Failed to load reviews:", err);
+      console.error("Could not load rider reviews:", err);
     } finally {
       setLoadingReviews(false);
     }
   }, [request]);
 
-  // Load the rider's history or the driver's assigned rides.
+  // Load the driver's average rating and individual reviews
+  const loadDriverReviews = useCallback(async () => {
+    const driverId = user?.id || user?.userId;
+
+    if (!driverId) {
+      console.error("Driver ID is missing from the logged-in user.");
+      return;
+    }
+
+    setLoadingDriverReviews(true);
+
+    try {
+      const data = await request(
+        `/api/reviews/driver/${encodeURIComponent(driverId)}`
+      );
+
+      setAverageRating(data.averageRating ?? null);
+      setTotalReviews(data.totalReviews ?? 0);
+      setDriverReviews(data.reviews || []);
+    } catch (err) {
+      console.error("Could not load driver reviews:", err);
+    } finally {
+      setLoadingDriverReviews(false);
+    }
+  }, [request, user?.id, user?.userId]);
+
+  // Load rider or driver ride history
   const loadRides = useCallback(async () => {
     setError("");
 
@@ -110,7 +141,7 @@ export default function Dashboard() {
     }
   }, [request, user]);
 
-  // Drivers see both available and assigned rides.
+  // Load available and assigned rides for drivers
   const loadDriverRides = useCallback(async () => {
     setError("");
 
@@ -120,13 +151,10 @@ export default function Dashboard() {
         request("/api/rides/driver/mine"),
       ]);
 
-      const availableRides = availableData.rides || [];
-      const assignedRides = assignedData.rides || [];
       const ridesById = new Map();
 
-      [...availableRides, ...assignedRides].forEach((ride) => {
-        ridesById.set(ride.id, ride);
-      });
+      [...(availableData.rides || []), ...(assignedData.rides || [])]
+        .forEach((ride) => ridesById.set(ride.id, ride));
 
       const allRides = Array.from(ridesById.values());
 
@@ -140,7 +168,7 @@ export default function Dashboard() {
     }
   }, [request]);
 
-  // Verify the saved login token.
+  // Verify login session
   useEffect(() => {
     if (!token || !user) {
       navigate("/login", { replace: true });
@@ -155,18 +183,32 @@ export default function Dashboard() {
       .catch((err) => setError(err.message));
   }, [token, user?.id, request, navigate]);
 
-  // Load rides and reviews according to the user's role.
+  
+  // Automatically refresh rides and reviews every 15 seconds.
   useEffect(() => {
     if (!user) return;
 
-    if (user.role === "rider") {
-      loadRides();
-      loadMyReviews();
-    } else {
-      setLoadingReviews(false);
-      loadDriverRides();
-    }
-  }, [user?.role, loadRides, loadDriverRides, loadMyReviews]);
+    const refreshDashboard = () => {
+      if (user.role === "rider") {
+        loadRides();
+        loadMyReviews();
+      } else {
+        loadDriverRides();
+        loadDriverReviews();
+      }
+    };
+
+    const intervalId = setInterval(refreshDashboard, 15000);
+
+    return () => clearInterval(intervalId);
+  }, [
+    user?.role,
+    loadRides,
+    loadDriverRides,
+    loadMyReviews,
+    loadDriverReviews,
+  ]);
+
 
   async function bookRide(e) {
     e.preventDefault();
@@ -255,13 +297,10 @@ export default function Dashboard() {
     }
   }
 
-  // Cancel a ride requested by the rider.
   async function cancelRide(rideId) {
-    const confirmed = window.confirm(
-      "Are you sure you want to cancel this ride?"
-    );
-
-    if (!confirmed) return;
+    if (!window.confirm("Are you sure you want to cancel this ride?")) {
+      return;
+    }
 
     setLoading(true);
     setError("");
@@ -281,7 +320,6 @@ export default function Dashboard() {
     }
   }
 
-  // Submit a rating for a completed ride.
   async function submitReview(rideId) {
     const rating = reviewRatings[rideId] || 5;
     const comment = reviewComments[rideId] || "";
@@ -302,7 +340,6 @@ export default function Dashboard() {
           ...previous.filter((review) => review.ride_id !== rideId),
         ]);
       } else {
-        // Reload from the database if the response doesn't include the review.
         await loadMyReviews();
       }
 
@@ -367,6 +404,7 @@ export default function Dashboard() {
                 loadMyReviews();
               } else {
                 loadDriverRides();
+                loadDriverReviews();
               }
             }}
           >
@@ -378,6 +416,84 @@ export default function Dashboard() {
         {message && <div className="notice success">{message}</div>}
         {error && <div className="notice error">{error}</div>}
 
+        {/* DRIVER RATINGS AND REVIEWS */}
+        {user.role === "driver" && (
+          <section className="dash-panel driver-rating-panel">
+            <div className="panel-title">
+              <h2>Your ratings and reviews</h2>
+
+              <span className="ride-count">
+                {totalReviews} {totalReviews === 1 ? "review" : "reviews"}
+              </span>
+            </div>
+
+            <div className="driver-rating-summary">
+              <div className="driver-rating-score">
+                <Star size={28} fill="currentColor" />
+                <strong>
+                  {averageRating == null
+                    ? "—"
+                    : Number(averageRating).toFixed(1)}
+                </strong>
+                <span>out of 5</span>
+              </div>
+
+              <div className="driver-rating-description">
+                <h3>
+                  {totalReviews === 0
+                    ? "Your journey starts here"
+                    : "Your driver rating"}
+                </h3>
+
+                <p>
+                  {totalReviews === 0
+                    ? "Complete rides and invite riders to share their experience."
+                    : `Based on ${totalReviews} ${
+                        totalReviews === 1 ? "review" : "reviews"
+                      } from riders.`}
+                </p>
+              </div>
+            </div>
+
+            {loadingDriverReviews ? (
+              <p className="reviews-loading">Loading your reviews...</p>
+            ) : driverReviews.length === 0 ? (
+              <div className="empty-state reviews-empty">
+                <Star size={28} />
+                <p>You haven't received any reviews yet.</p>
+              </div>
+            ) : (
+              <div className="driver-review-list">
+                {driverReviews.map((review) => (
+                  <article className="driver-review-card" key={review.id}>
+                    <div className="driver-review-header">
+                      <div>
+                        <strong>{review.rider_name || "Rider"}</strong>
+                        <div
+                          className="driver-review-stars"
+                          aria-label={`${review.rating} out of 5 stars`}
+                        >
+                          {"★".repeat(Number(review.rating))}
+                          {"☆".repeat(5 - Number(review.rating))}
+                        </div>
+                      </div>
+
+                      <small>
+                        {new Date(review.created_at).toLocaleDateString()}
+                      </small>
+                    </div>
+
+                    <p>
+                      {review.comment || "The rider left a rating without a comment."}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* RIDER BOOKING */}
         {user.role === "rider" && (
           <section className="dash-panel">
             <h2>Book a ride</h2>
@@ -418,6 +534,7 @@ export default function Dashboard() {
           </section>
         )}
 
+        {/* RIDE HISTORY AND DRIVER ACTIONS */}
         <section className="dash-panel">
           <div className="panel-title">
             <h2>
@@ -523,24 +640,19 @@ export default function Dashboard() {
                         </div>
                       )}
 
-                    {/* Saved review for this completed ride */}
+                    {/* SAVED RIDER REVIEW */}
                     {user.role === "rider" &&
                       ride.status === "completed" &&
                       savedReview && (
                         <div className="saved-review">
                           <h3>Your review</h3>
 
-                          <div
-                            className="saved-review-stars"
-                            aria-label={`${savedReview.rating} out of 5 stars`}
-                          >
+                          <div className="saved-review-stars">
                             {"★".repeat(Number(savedReview.rating))}
                             {"☆".repeat(5 - Number(savedReview.rating))}
                           </div>
 
-                          {savedReview.comment && (
-                            <p>{savedReview.comment}</p>
-                          )}
+                          {savedReview.comment && <p>{savedReview.comment}</p>}
 
                           <small>
                             Submitted{" "}
@@ -551,7 +663,7 @@ export default function Dashboard() {
                         </div>
                       )}
 
-                    {/* Rating form for completed rides without a review */}
+                    {/* REVIEW FORM FOR COMPLETED RIDES */}
                     {user.role === "rider" &&
                       ride.status === "completed" &&
                       !savedReview &&
@@ -559,10 +671,7 @@ export default function Dashboard() {
                         <div className="review-form">
                           <h3>Rate your ride</h3>
 
-                          <div
-                            className="review-stars"
-                            aria-label="Choose a rating"
-                          >
+                          <div className="review-stars">
                             {[1, 2, 3, 4, 5].map((star) => {
                               const selectedRating =
                                 reviewRatings[ride.id] || 5;

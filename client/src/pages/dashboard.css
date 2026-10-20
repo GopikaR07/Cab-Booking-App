@@ -831,3 +831,49 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+
+.review-form {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fafafa;
+}
+
+.review-form h3 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+
+.review-stars {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.review-star {
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 30px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.review-star.selected {
+  color: #f59e0b;
+}
+
+.review-comment {
+  display: block;
+  width: 100%;
+  min-height: 85px;
+  padding: 12px;
+  margin-bottom: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font: inherit;
+  resize: vertical;
+  box-sizing: border-box;
+}

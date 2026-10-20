@@ -2,6 +2,7 @@ const pool = require("./config/db");
 const verifyToken = require("./middleware/authMiddleware");
 const authRoutes = require("./routes/authRoutes");
 const rideRoutes = require("./routes/rideRoutes");
+const reviewRoutes = require("./routes/reviewRoutes");
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
@@ -14,6 +15,7 @@ app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/rides", rideRoutes);
+app.use("/api/reviews", reviewRoutes);
 
 // Welcome route
 app.get("/", (req, res) => {
